@@ -1,0 +1,192 @@
+// SQLite for the local MVP; switch provider to "postgresql" for production.
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Store {
+  id        String  @id @default(cuid())
+  code      String  @unique
+  name      String
+  type      String  @default("STORE") // STORE | WAREHOUSE
+  city      String?
+  aslCode   String?
+  users     User[]
+  balances  StockBalance[]
+  movements Movement[]
+  rules     StockRule[]
+  orders    PurchaseOrder[]
+  sales     Sale[]
+}
+
+model User {
+  id           String  @id @default(cuid())
+  name         String
+  email        String  @unique
+  passwordHash String
+  role         String  // ADMIN | PHARMACIST | CASHIER | WAREHOUSE
+  storeId      String?
+  store        Store?  @relation(fields: [storeId], references: [id])
+}
+
+model Supplier {
+  id           String  @id @default(cuid())
+  name         String
+  type         String  @default("WHOLESALER") // WHOLESALER | MANUFACTURER | WAREHOUSE
+  leadTimeDays Int     @default(1)
+  products     Product[]
+  orders       PurchaseOrder[]
+}
+
+model Product {
+  id                  String   @id @default(cuid())
+  aic                 String?  @unique // AIC / Minsan (9 digits)
+  gtin                String?  @unique // EAN-13 / GTIN-14
+  name                String
+  activeIngredient    String?
+  atc                 String?
+  manufacturer        String?
+  category            String   // FARMACO | PARAFARMACO | DISPOSITIVO | COSMETICO | INTEGRATORE | VETERINARIO
+  drugClass           String?  // A | C | H | SOP | OTC
+  rxRequired          Boolean  @default(false)
+  narcotic            Boolean  @default(false)
+  coldChain           Boolean  @default(false)
+  dpc                 Boolean  @default(false)
+  vatRate             Float    @default(22)
+  publicPrice         Float    @default(0)
+  purchasePrice       Float    @default(0)
+  avgCost             Float    @default(0)
+  packMultiple        Int      @default(1)
+  preferredSupplierId String?
+  preferredSupplier   Supplier? @relation(fields: [preferredSupplierId], references: [id])
+  active              Boolean  @default(true)
+  lots                Lot[]
+  rules               StockRule[]
+  movements           Movement[]
+}
+
+model Lot {
+  id        String   @id @default(cuid())
+  productId String
+  product   Product  @relation(fields: [productId], references: [id])
+  lot       String
+  expiry    DateTime
+  owner     String   @default("PHARMACY") // PHARMACY | ASL (DPC stock)
+  blocked   Boolean  @default(false)       // recalled / quarantined
+  recallId  String?
+  balances  StockBalance[]
+  movements Movement[]
+
+  @@unique([productId, lot, owner])
+}
+
+model StockBalance {
+  storeId String
+  store   Store  @relation(fields: [storeId], references: [id])
+  lotId   String
+  lot     Lot    @relation(fields: [lotId], references: [id])
+  qty     Float  @default(0)
+
+  @@id([storeId, lotId])
+}
+
+model StockRule {
+  storeId   String
+  store     Store   @relation(fields: [storeId], references: [id])
+  productId String
+  product   Product @relation(fields: [productId], references: [id])
+  min       Float   @default(0)
+  max       Float   @default(0)
+
+  @@id([storeId, productId])
+}
+
+// Immutable stock ledger: balances are a projection of these rows.
+model Movement {
+  id        String   @id @default(cuid())
+  storeId   String
+  store     Store    @relation(fields: [storeId], references: [id])
+  productId String
+  product   Product  @relation(fields: [productId], references: [id])
+  lotId     String
+  lot       Lot      @relation(fields: [lotId], references: [id])
+  qty       Float    // signed
+  type      String   // RECEIPT SALE TRANSFER_OUT TRANSFER_IN ADJUST COUNT EXPIRY_WRITEOFF RETURN_SUPPLIER RECALL
+  unitCost  Float    @default(0)
+  ref       String?
+  note      String?
+  userId    String?
+  createdAt DateTime @default(now())
+
+  @@index([storeId, productId, createdAt])
+}
+
+model PurchaseOrder {
+  id         String    @id @default(cuid())
+  number     String    @unique
+  storeId    String
+  store      Store     @relation(fields: [storeId], references: [id])
+  supplierId String
+  supplier   Supplier  @relation(fields: [supplierId], references: [id])
+  status     String    @default("DRAFT") // DRAFT | SENT | RECEIVED
+  createdAt  DateTime  @default(now())
+  lines      PurchaseOrderLine[]
+}
+
+model PurchaseOrderLine {
+  id          String        @id @default(cuid())
+  orderId     String
+  order       PurchaseOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  productId   String
+  qty         Float
+  unitCost    Float
+  receivedQty Float         @default(0)
+}
+
+model Sale {
+  id            String     @id @default(cuid())
+  number        String     @unique
+  storeId       String
+  store         Store      @relation(fields: [storeId], references: [id])
+  userId        String?
+  patientCf     String?
+  paymentMethod String     @default("CASH")
+  total         Float
+  vatTotal      Float
+  createdAt     DateTime   @default(now())
+  lines         SaleLine[]
+}
+
+model SaleLine {
+  id        String @id @default(cuid())
+  saleId    String
+  sale      Sale   @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  productId String
+  lotId     String
+  name      String
+  lot       String
+  qty       Float
+  unitPrice Float
+  vatRate   Float
+  total     Float
+}
+
+model Recall {
+  id        String   @id @default(cuid())
+  productId String
+  lots      String   // comma-separated lot numbers
+  severity  String   @default("II") // I | II | III
+  reason    String
+  status    String   @default("OPEN") // OPEN | CLOSED
+  createdAt DateTime @default(now())
+  closedAt  DateTime?
+}
+
+model Counter {
+  key  String @id
+  next Int    @default(1)
+}
