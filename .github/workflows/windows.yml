@@ -1,0 +1,91 @@
+name: Windows portable build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  windows-portable:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.22.1
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Unit tests
+        run: npm test
+
+      - name: Build (web + bundled server, Prisma Windows engine)
+        run: npm run build
+
+      - name: Package portable zip
+        run: npm run package:win
+
+      # Run the package from a folder outside the repo, so it cannot fall back on the repo's node_modules.
+      - name: Extract package outside the repository
+        run: |
+          $zip = Get-ChildItem release -Filter "FarmaStock-*-portable-win-x64.zip" | Select-Object -First 1
+          Expand-Archive $zip.FullName -DestinationPath C:\fs-test -Force
+          Get-ChildItem C:\fs-test\FarmaStock
+
+      - name: First start (fresh database, migrations, demo data)
+        run: |
+          $env:FARMASTOCK_DATA_DIR = "C:\fs-test\FarmaStock\data"
+          $p = Start-Process -FilePath C:\fs-test\FarmaStock\node.exe -ArgumentList "app\server.mjs" `
+                 -WorkingDirectory C:\fs-test\FarmaStock -PassThru -NoNewWindow `
+                 -RedirectStandardOutput C:\fs-test\run1.log -RedirectStandardError C:\fs-test\run1.err
+          $p.Id | Out-File C:\fs-test\pid1.txt
+          for ($i = 0; $i -lt 90; $i++) {
+            try { $h = Invoke-RestMethod http://localhost:47400/api/health; if ($h.ok) { break } } catch { Start-Sleep -Seconds 1 }
+          }
+          Get-Content C:\fs-test\run1.log
+          if (-not $h.ok) { Get-Content C:\fs-test\run1.err; throw "Server did not start" }
+          if ($h.platform -ne "win32") { throw "Unexpected platform $($h.platform)" }
+          Write-Host "Health: $($h | ConvertTo-Json -Compress)"
+
+      - name: API smoke test on Windows
+        env:
+          FARMASTOCK_URL: http://localhost:47400
+        run: python scripts/smoke.py
+
+      - name: Stop first run
+        run: Stop-Process -Id (Get-Content C:\fs-test\pid1.txt) -Force
+
+      # Second start through the real launcher; data must persist and migrations must not re-run.
+      - name: Restart through "Avvia FarmaStock.bat"
+        run: |
+          Start-Process -FilePath cmd.exe -ArgumentList '/c', '"C:\fs-test\FarmaStock\Avvia FarmaStock.bat" > C:\fs-test\run2.log 2>&1' -WindowStyle Hidden
+          for ($i = 0; $i -lt 60; $i++) {
+            try { $h = Invoke-RestMethod http://localhost:47400/api/health; if ($h.ok) { break } } catch { Start-Sleep -Seconds 1 }
+          }
+          Get-Content C:\fs-test\run2.log
+          if (-not $h.ok) { throw "Launcher did not start the server" }
+          if (Select-String -Path C:\fs-test\run2.log -Pattern "Migrations applied|loading demo data" -Quiet) { throw "Migrations or demo seed ran again on restart" }
+          if (-not (Test-Path C:\fs-test\FarmaStock\data\config.json)) { throw "config.json missing" }
+          $login = Invoke-RestMethod -Method Post -Uri http://localhost:47400/api/auth/login -ContentType "application/json" `
+                     -Body '{"email":"farmacista@farmastock.it","password":"farma123"}'
+          if (-not $login.token) { throw "Login after restart failed" }
+          Write-Host "Restart OK: data persisted, no migration re-run, login works"
+
+      - name: Logs on failure
+        if: failure()
+        run: Get-ChildItem C:\fs-test\*.log, C:\fs-test\*.err -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "== $_"; Get-Content $_ }
+
+      - name: Upload portable zip
+        uses: actions/upload-artifact@v4
+        with:
+          name: FarmaStock-portable-win-x64
+          path: release/FarmaStock-*-portable-win-x64.zip
+          retention-days: 14

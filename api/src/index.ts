@@ -1,13 +1,15 @@
+// config must be imported first: it sets DATABASE_URL before PrismaClient is created.
+import { config } from "./config.js";
 import Fastify from "fastify";
 import cors from "@fastify/cors";
 import jwt from "@fastify/jwt";
 import fstatic from "@fastify/static";
-import { existsSync } from "node:fs";
-import { fileURLToPath } from "node:url";
-import path from "node:path";
+import { exec } from "node:child_process";
 import { ZodError } from "zod";
 import { AppError, prisma } from "./stock.js";
 import { registerRoutes } from "./routes.js";
+import { runMigrations } from "./migrate.js";
+import { seedDemo } from "./demo.js";
 
 declare module "@fastify/jwt" {
   interface FastifyJWT {
@@ -15,9 +17,16 @@ declare module "@fastify/jwt" {
   }
 }
 
+const applied = await runMigrations(prisma);
+if (applied.length) console.log(`Migrations applied: ${applied.join(", ")}`);
+if (config.demo && (await prisma.store.count()) === 0) {
+  console.log("Empty database: loading demo data…");
+  await seedDemo();
+}
+
 const app = Fastify({ logger: { level: "warn" } });
 await app.register(cors, { origin: true });
-await app.register(jwt, { secret: process.env.JWT_SECRET ?? "dev-secret-change-me" });
+await app.register(jwt, { secret: config.jwtSecret });
 
 app.setErrorHandler((err, _req, reply) => {
   if (err instanceof AppError) return reply.status(err.status).send({ error: err.message });
@@ -37,24 +46,31 @@ app.addHook("onRequest", async (req, reply) => {
   }
 });
 
-app.get("/api/health", async () => ({ ok: true }));
+app.get("/api/health", async () => ({ ok: true, version: process.env.FARMASTOCK_VERSION ?? "dev", platform: process.platform }));
 await registerRoutes(app);
 
-// Serve the built web app (single URL for the MVP).
-const webDist = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../web/dist");
-if (existsSync(webDist)) {
-  await app.register(fstatic, { root: webDist });
+// Serve the built web app (single URL).
+if (config.webDir) {
+  await app.register(fstatic, { root: config.webDir });
   app.setNotFoundHandler((req, reply) => {
     if (req.url.startsWith("/api")) return reply.status(404).send({ error: "Not found" });
     return reply.sendFile("index.html");
   });
 }
 
-const port = Number(process.env.PORT ?? 4000);
-await app.listen({ port, host: "127.0.0.1" });
-console.log(`FarmaStock IT running on http://localhost:${port}`);
+await app.listen({ port: config.port, host: config.host });
+const url = `http://localhost:${config.port}`;
+console.log(`FarmaStock IT running on ${url} (data: ${config.dataDir})`);
 
-process.on("SIGTERM", async () => {
+if (config.openBrowser) {
+  const cmd = process.platform === "win32" ? `start "" "${url}"` : process.platform === "darwin" ? `open "${url}"` : `xdg-open "${url}"`;
+  exec(cmd);
+}
+
+const shutdown = async () => {
   await app.close();
   await prisma.$disconnect();
-});
+  process.exit(0);
+};
+process.on("SIGTERM", shutdown);
+process.on("SIGINT", shutdown);

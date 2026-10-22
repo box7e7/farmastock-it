@@ -1,6 +1,7 @@
-// SQLite for the local MVP; switch provider to "postgresql" for production.
+// SQLite (WAL) in DATA_DIR; schema changes ship as SQL files in prisma/migrations (see src/migrate.ts).
 generator client {
-  provider = "prisma-client-js"
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "windows"]
 }
 
 datasource db {

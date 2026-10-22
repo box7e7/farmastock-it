@@ -2,13 +2,26 @@
 
 Stock management for Italian pharmacies and chains (central warehouse plus stores). See [SPECS.md](SPECS.md) and [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md).
 
-## Run locally
+## Run locally (development)
 ```bash
-npm run setup     # install, create SQLite DB with demo data, build web
-npm start         # http://localhost:4000
+npm run setup     # install, build the web UI, create the database with demo data
+npm start         # http://localhost:47400
 ```
-Dev mode with hot reload: `npm run dev` (web on http://localhost:5173, API on :4000).
-Reset demo data: delete `api/prisma/farmastock.db`, then `npm run db:setup -w api`.
+Dev mode with hot reload: `npm run dev` (web on http://localhost:5173, API on :47400).
+Data (SQLite database, `config.json` with a random JWT secret, backups) lives in `api/data/`, or in `FARMASTOCK_DATA_DIR` if set.
+Reset demo data: stop the app, delete `api/data/`, then run `npm start` (an empty database is migrated and seeded automatically).
+
+## Portable package (self-contained, no Node.js install needed)
+```bash
+npm run build          # web UI + bundled server (dist/app)
+npm run package:win    # release/FarmaStock-<ver>-portable-win-x64.zip
+npm run package:local  # same for the current OS (e.g. macOS) for local testing
+```
+On Windows: unzip, then double-click **`Avvia FarmaStock.bat`**. The browser opens on http://localhost:47400. Data goes in `FarmaStock\data`.
+Each push to `main` builds the zip **and tests it on a real Windows machine** (GitHub Actions, `.github/workflows/windows.yml`): fresh start, API smoke test, restart through the `.bat` launcher. The zip is downloadable from the workflow run's *Artifacts*.
+
+## Database changes
+Edit `api/prisma/schema.prisma`, then `npm run migration:new -w api -- <name>`. This creates `api/prisma/migrations/NNNN_<name>.sql`. Migrations are applied automatically at startup, after an online backup to `data/backups/`.
 
 ## Demo users
 | Role | Email | Password |
@@ -38,3 +51,4 @@ All AIC codes, lots and names are **fictitious demo data**.
 
 ## Tests
 `npm test`: unit tests for the GS1 parser and replenishment maths.
+`npm run smoke`: end-to-end API test against a running server with demo data.

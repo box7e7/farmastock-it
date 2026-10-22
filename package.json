@@ -2,12 +2,21 @@
   "name": "farmastock-it",
   "private": true,
   "version": "0.1.0",
-  "workspaces": ["api", "web"],
+  "workspaces": [
+    "api",
+    "web"
+  ],
   "scripts": {
-    "setup": "npm install && npm run db:setup -w api && npm run build -w web",
+    "setup": "npm install && npm run build -w web && npm run db:setup -w api",
     "start": "npm start -w api",
     "dev": "concurrently -n api,web -c blue,green \"npm run dev -w api\" \"npm run dev -w web\"",
-    "test": "npm test -w api"
+    "test": "npm test -w api",
+    "build": "npm run build -w web && npm run build -w api",
+    "package:win": "node scripts/package-portable.mjs --platform win32 --arch x64",
+    "package:local": "node scripts/package-portable.mjs",
+    "smoke": "python3 scripts/smoke.py"
   },
-  "devDependencies": { "concurrently": "9.2.1" }
+  "devDependencies": {
+    "concurrently": "9.2.1"
+  }
 }
