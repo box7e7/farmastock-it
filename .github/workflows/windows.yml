@@ -40,13 +40,16 @@ jobs:
           Expand-Archive $zip.FullName -DestinationPath C:\fs-test -Force
           Get-ChildItem C:\fs-test\FarmaStock
 
-      - name: First start (fresh database, migrations, demo data)
+      # Background processes are terminated when a step ends on Windows runners,
+      # so start, test and stop the server within one step.
+      - name: First start (fresh database, migrations, demo data) + API smoke test
+        env:
+          FARMASTOCK_URL: http://localhost:47400
         run: |
           $env:FARMASTOCK_DATA_DIR = "C:\fs-test\FarmaStock\data"
           $p = Start-Process -FilePath C:\fs-test\FarmaStock\node.exe -ArgumentList "app\server.mjs" `
                  -WorkingDirectory C:\fs-test\FarmaStock -PassThru -NoNewWindow `
                  -RedirectStandardOutput C:\fs-test\run1.log -RedirectStandardError C:\fs-test\run1.err
-          $p.Id | Out-File C:\fs-test\pid1.txt
           for ($i = 0; $i -lt 90; $i++) {
             try { $h = Invoke-RestMethod http://localhost:47400/api/health; if ($h.ok) { break } } catch { Start-Sleep -Seconds 1 }
           }
@@ -54,14 +57,11 @@ jobs:
           if (-not $h.ok) { Get-Content C:\fs-test\run1.err; throw "Server did not start" }
           if ($h.platform -ne "win32") { throw "Unexpected platform $($h.platform)" }
           Write-Host "Health: $($h | ConvertTo-Json -Compress)"
-
-      - name: API smoke test on Windows
-        env:
-          FARMASTOCK_URL: http://localhost:47400
-        run: python scripts/smoke.py
-
-      - name: Stop first run
-        run: Stop-Process -Id (Get-Content C:\fs-test\pid1.txt) -Force
+          python scripts/smoke.py
+          $code = $LASTEXITCODE
+          Stop-Process -Id $p.Id -Force
+          Start-Sleep -Seconds 2
+          if ($code -ne 0) { throw "Smoke test failed" }
 
       # Second start through the real launcher; data must persist and migrations must not re-run.
       - name: Restart through "Avvia FarmaStock.bat"
